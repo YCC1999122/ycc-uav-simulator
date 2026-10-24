@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YCC · UAV Training Simulator / 无人机训练模拟器</title>
+  <style>
+    :root {
+      --hud-green: #39ff88;
+      --hud-amber: #ffb454;
+      --hud-red: #ff4d4d;
+      --hud-dim: rgba(57, 255, 136, 0.55);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+    body { font-family: "Consolas", "Courier New", monospace; user-select: none; }
+    #app { position: fixed; inset: 0; }
+    canvas { display: block; }
+
+    /* ---------- FPV OSD ---------- */
+    #osd {
+      position: fixed; inset: 0; pointer-events: none; z-index: 20;
+      color: var(--hud-green); text-shadow: 0 0 6px rgba(57,255,136,.8), 0 0 2px rgba(57,255,136,.9);
+      font-size: 15px; letter-spacing: 1px; display: none;
+    }
+    #osd.digital { color: #eaf2ff; text-shadow: 0 0 4px rgba(160,200,255,.7); }
+    .osd-corner { position: absolute; line-height: 1.5em; white-space: pre; }
+    #osd-batt {
+      top: 14px; left: 22px; font-size: 31px; font-weight: bold; letter-spacing: 1px;
+      text-shadow: 0 0 10px rgba(57,255,136,.9);
+    }
+    #osd-batt.warn { color: var(--hud-amber); text-shadow: 0 0 10px rgba(255,180,84,.9); }
+    #osd-batt.crit { color: var(--hud-red); text-shadow: 0 0 12px rgba(255,60,60,.95); animation: blink .5s steps(2) infinite; }
+    #osd-tl { top: 56px; left: 24px; }
+    #osd-tr { top: 18px; right: 24px; text-align: right; }
+    #osd-bl { bottom: 20px; left: 24px; }
+    #osd-br { bottom: 20px; right: 24px; text-align: right; }
+    #osd-crosshair {
+      position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      font-size: 18px; opacity: .9;
+    }
+    #osd-ladder {
+      position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      width: 260px; height: 160px; opacity: .85;
+    }
+    #osd-warning {
+      position: absolute; left: 50%; top: 30%; transform: translateX(-50%);
+      color: var(--hud-red); font-size: 20px; font-weight: bold; text-align: center;
+      white-space: pre-line; line-height: 1.5;
+      text-shadow: 0 0 10px rgba(255,60,60,.9); display: none; animation: blink .5s steps(2) infinite;
+    }
+    @keyframes blink { 50% { opacity: .15; } }
+    #osd-signal-lost {
+      position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+      flex-direction: column; color: #9fb4c8; font-size: 22px; letter-spacing: 6px;
+      background: radial-gradient(ellipse at center, rgba(10,14,20,.55), rgba(4,6,10,.92));
+    }
+
+    /* ---------- GCS map ---------- */
+    #gcs {
+      position: fixed; right: 18px; top: 44px; width: 360px; height: 360px;
+      border: 1px solid rgba(57,255,136,.5); border-radius: 8px; z-index: 25;
+      background: rgba(6, 14, 10, .82); backdrop-filter: blur(6px);
+      box-shadow: 0 0 24px rgba(0,0,0,.6), inset 0 0 40px rgba(57,255,136,.06);
+      display: none; cursor: crosshair; pointer-events: auto; touch-action: none;
+    }
+    #gcs.full {
+      right: 50%; top: 50%; transform: translate(50%, -50%);
+      width: min(78vh, 720px); height: min(78vh, 720px);
+    }
+    #gcs-label {
+      position: absolute; top: 6px; left: 10px; font-size: 11px; color: var(--hud-dim);
+      letter-spacing: 2px; pointer-events: none;
+    }
+    #gcs-coord {
+      position: absolute; bottom: 6px; left: 10px; font-size: 11px; color: var(--hud-dim);
+      pointer-events: none;
+    }
+
+    /* ---------- HUD top bar ---------- */
+    #topbar {
+      position: fixed; top: 0; left: 0; right: 0; height: 34px; z-index: 30;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 14px; font-size: 12px; color: #cfe8d8; letter-spacing: 1px;
+      background: linear-gradient(180deg, rgba(4,10,8,.85), rgba(4,10,8,.35) 75%, transparent);
+      pointer-events: none;
+    }
+    #topbar .grp { display: flex; gap: 16px; align-items: center; }
+    #topbar b { color: var(--hud-green); font-weight: normal; }
+    #topbar .warn { color: var(--hud-amber); }
+    #topbar .crit { color: var(--hud-red); animation: blink .5s steps(2) infinite; }
+    #topbar .tb-batt { font-size: 18px; font-weight: bold; letter-spacing: .5px; }
+
+    /* ---------- menu ---------- */
+    #menu {
+      position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(ellipse at 50% 40%, rgba(12,22,18,.88), rgba(3,6,5,.96));
+      backdrop-filter: blur(8px); transition: opacity .5s;
+    }
+    #menu.hidden { opacity: 0; pointer-events: none; }
+    .panel {
+      width: 620px; padding: 34px 40px; border-radius: 14px;
+      background: linear-gradient(160deg, rgba(16,28,24,.92), rgba(8,14,12,.94));
+      border: 1px solid rgba(57,255,136,.25);
+      box-shadow: 0 24px 80px rgba(0,0,0,.7), inset 0 1px 0 rgba(255,255,255,.06);
+      color: #d7e8dd;
+    }
+    .panel h1 { font-size: 22px; letter-spacing: 6px; color: var(--hud-green); font-weight: normal; margin-bottom: 4px; }
+    .panel h2 { font-size: 11px; letter-spacing: 3px; color: #6f8f7d; font-weight: normal; margin-bottom: 24px; }
+    .drone-select { display: flex; gap: 14px; margin-bottom: 22px; }
+    .drone-card {
+      flex: 1; padding: 14px 16px; border-radius: 10px; cursor: pointer;
+      border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.03);
+      transition: all .18s;
+    }
+    .drone-card:hover { transform: translateY(-3px); border-color: rgba(57,255,136,.5); }
+    .drone-card.sel { border-color: var(--hud-green); background: rgba(57,255,136,.08); box-shadow: 0 0 20px rgba(57,255,136,.15); }
+    .drone-card h3 { font-size: 14px; color: #fff; margin-bottom: 6px; font-weight: normal; letter-spacing: 1px; }
+    .drone-card p { font-size: 11px; color: #8aa495; line-height: 1.6; }
+    .keys { font-size: 11px; color: #9db8a8; line-height: 1.9; column-count: 2; column-gap: 30px; margin-bottom: 22px; }
+    .keys b { color: #e8f5ec; display: inline-block; min-width: 86px; font-weight: normal; }
+    #launch {
+      width: 100%; padding: 13px; font-size: 14px; letter-spacing: 8px; cursor: pointer;
+      color: #06130c; background: linear-gradient(180deg, #54ffa0, #23c46c);
+      border: none; border-radius: 8px; font-family: inherit; font-weight: bold;
+      box-shadow: 0 6px 24px rgba(57,255,136,.35); transition: all .15s;
+    }
+    #launch:hover { transform: translateY(-2px); box-shadow: 0 10px 32px rgba(57,255,136,.5); }
+    #launch:active { transform: translateY(0); }
+
+    /* ---------- help panel (bottom-left) ---------- */
+    #help-panel {
+      position: fixed; left: 14px; bottom: 14px; z-index: 30;
+      padding: 12px 16px; border-radius: 8px; font-size: 11.5px; line-height: 1.75;
+      color: #b8d4c2; background: rgba(5, 12, 9, .72); backdrop-filter: blur(6px);
+      border: 1px solid rgba(57,255,136,.22); pointer-events: none;
+      column-count: 2; column-gap: 26px; letter-spacing: .5px;
+    }
+    #help-panel b { color: var(--hud-green); font-weight: normal; display: inline-block; min-width: 74px; }
+    #help-panel .hd {
+      column-span: all; color: var(--hud-green); letter-spacing: 3px; font-size: 10px;
+      border-bottom: 1px solid rgba(57,255,136,.2); padding-bottom: 4px; margin-bottom: 6px;
+    }
+
+    #toast {
+      position: fixed; top: 52px; left: 50%; transform: translateX(-50%); z-index: 60;
+      padding: 8px 22px; border-radius: 6px; font-size: 13px; letter-spacing: 2px;
+      background: rgba(8,16,12,.88); border: 1px solid rgba(57,255,136,.4); color: var(--hud-green);
+      opacity: 0; transition: opacity .25s; pointer-events: none;
+    }
+    #crosshair-dot {
+      position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%);
+      width: 4px; height: 4px; border-radius: 50%; background: rgba(255,255,255,.85);
+      box-shadow: 0 0 6px rgba(255,255,255,.9); z-index: 15; display: none;
+    }
+    /* ---------- YCC boot / initialisation screen ---------- */
+    #boot {
+      position: fixed; inset: 0; z-index: 200; overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(ellipse at 50% 42%, #0c1a15 0%, #05090b 58%, #020405 100%);
+      color: #a9d8bd; font-size: 12px; letter-spacing: 2px;
+      transition: opacity .55s ease;
+    }
+    #boot.out { opacity: 0; pointer-events: none; }
+    #boot::before {
+      content: ''; position: absolute; inset: -10%; pointer-events: none;
+      background-image: linear-gradient(rgba(57,255,136,.06) 1px, transparent 1px),
+                        linear-gradient(90deg, rgba(57,255,136,.06) 1px, transparent 1px);
+      background-size: 46px 46px;
+      -webkit-mask-image: radial-gradient(ellipse at 50% 45%, #000 18%, transparent 76%);
+      mask-image: radial-gradient(ellipse at 50% 45%, #000 18%, transparent 76%);
+      animation: bootGrid 9s ease-in-out infinite alternate;
+    }
+    @keyframes bootGrid { from { transform: translate(-12px, -8px); } to { transform: translate(12px, 8px); } }
+    .boot-glow {
+      position: absolute; width: 640px; height: 640px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(57,255,136,.16), rgba(57,255,136,0) 62%);
+      filter: blur(18px); animation: bootPulse 3.6s ease-in-out infinite;
+    }
+    @keyframes bootPulse { 0%,100% { opacity: .5; transform: scale(1); } 50% { opacity: 1; transform: scale(1.07); } }
+    .boot-inner { position: relative; width: 560px; max-width: 88vw; }
+    .boot-brand { display: flex; align-items: flex-end; gap: 18px; }
+    .boot-ycc {
+      font-size: 80px; font-weight: 700; line-height: .92; letter-spacing: 12px;
+      background: linear-gradient(180deg, #e6fff1 0%, #4dff9c 46%, #12b865 100%);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      filter: drop-shadow(0 0 30px rgba(57,255,136,.45));
+      animation: yccIn 1s cubic-bezier(.2,.9,.2,1) both;
+    }
+    @keyframes yccIn {
+      from { opacity: 0; transform: translateY(16px) scale(.94); letter-spacing: 34px; }
+      to   { opacity: 1; transform: none; letter-spacing: 12px; }
+    }
+    .boot-brand-sub {
+      padding: 0 0 10px 14px; font-size: 10px; line-height: 1.8; letter-spacing: 3px;
+      color: #6f9f86; border-left: 1px solid rgba(57,255,136,.28);
+      animation: fadeUp .8s .25s both;
+    }
+    .boot-title {
+      margin-top: 16px; font-size: 13px; letter-spacing: 5px; color: #cfe8d8;
+      animation: fadeUp .8s .35s both;
+    }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    .boot-bar-wrap { display: flex; align-items: center; gap: 12px; margin: 22px 0 10px; }
+    .boot-bar { flex: 1; height: 3px; background: rgba(57,255,136,.14); border-radius: 2px; overflow: hidden; }
+    #boot-fill {
+      width: 0%; height: 100%; border-radius: 2px;
+      background: linear-gradient(90deg, #23c46c, #7dffb8);
+      box-shadow: 0 0 14px rgba(57,255,136,.8);
+      transition: width .35s cubic-bezier(.2,.9,.2,1);
+    }
+    #boot-pct { font-size: 11px; color: var(--hud-green); letter-spacing: 1px; min-width: 38px; text-align: right; }
+    #boot-log {
+      height: 138px; overflow: hidden; padding: 8px 0;
+      border-top: 1px solid rgba(57,255,136,.12); border-bottom: 1px solid rgba(57,255,136,.12);
+    }
+    .boot-row {
+      display: flex; align-items: center; gap: 10px; height: 22px; font-size: 11px;
+      color: #7fa891; animation: fadeUp .3s both;
+    }
+    .boot-k {
+      width: 36px; font-size: 9px; letter-spacing: 1px; color: #3d6b53; text-align: center;
+      border: 1px solid rgba(57,255,136,.18); border-radius: 3px; padding: 1px 0;
+    }
+    .boot-row.ok .boot-k { color: #06130c; background: #39ff88; border-color: #39ff88; }
+    .boot-en { min-width: 118px; color: #cfe8d8; letter-spacing: 1px; }
+    .boot-zh { flex: 1; color: #6f927e; letter-spacing: 1px; }
+    .boot-st { font-size: 9px; letter-spacing: 1px; color: #3d6b53; }
+    .boot-row.ok .boot-st { color: #2f7f57; }
+    .boot-foot { margin-top: 12px; font-size: 10px; letter-spacing: 3px; color: #4f7561; text-align: right; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- FPV OSD overlay -->
+  <div id="osd">
+    <div class="osd-corner" id="osd-batt"></div>
+    <div class="osd-corner" id="osd-tl"></div>
+    <div class="osd-corner" id="osd-tr"></div>
+    <div class="osd-corner" id="osd-bl"></div>
+    <div class="osd-corner" id="osd-br"></div>
+    <div id="osd-crosshair">+</div>
+    <canvas id="osd-ladder" width="260" height="160"></canvas>
+    <div id="osd-warning"></div>
+    <div id="osd-signal-lost"><div>NO SIGNAL</div><div style="font-size:18px;margin-top:6px;letter-spacing:4px;">无信号</div><div style="font-size:12px;margin-top:14px;letter-spacing:2px;">LINK LOST — RTH ENGAGED [G] / 链路中断 — 自动返航</div></div>
+  </div>
+
+  <!-- GCS tactical map -->
+  <canvas id="gcs" width="680" height="680"></canvas>
+  <div id="gcs-label" style="position:fixed;z-index:26;display:none;">GCS // TRAINING MAP 训练地图</div>
+
+  <!-- top status bar -->
+  <div id="topbar">
+    <div class="grp">
+      <span>UAV 机型 <b id="tb-model">—</b></span>
+      <span>VIEW 视角 <b id="tb-view">FPV</b></span>
+      <span>MODE 模式 <b id="tb-mode">ANGLE</b></span>
+    </div>
+    <div class="grp">
+      <span>BATT 电池 <b id="tb-batt" class="tb-batt">16.8V</b></span>
+      <span>LINK 链路 <b id="tb-link">100%</b></span>
+      <span>GPS 坐标 <b id="tb-gps">—</b></span>
+      <span>AMMO 弹药 <b id="tb-ammo">∞</b></span>
+      <span>机体 AIRFRAME <b id="tb-dmg">▮▮▮▮▮ 100%</b></span>
+      <span>任务 MSN <b id="tb-msn">待命 STANDBY</b></span>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+  <div id="crosshair-dot"></div>
+
+  <!-- persistent controls help -->
+  <div id="help-panel">
+    <div class="hd">CONTROLS 操作</div>
+    <div><b>W / S</b> 俯仰</div>
+    <div><b>A / D</b> 偏航</div>
+    <div><b>Q / E</b> 横滚</div>
+    <div><b>Shift/Ctrl</b> 升 / 降（松开悬停）</div>
+    <div><b>B</b> 投放弹药</div>
+      <div><b>左键</b> 榴弹直射</div>
+    <div><b>N</b> 投放标记烟雾</div>
+    <div><b>V</b> FPV / 追踪视角</div>
+    <div><b>C</b> 前视 / 下视摄像头</div>
+    <div><b>U</b> 镜头 鱼眼/广角/标准</div>
+    <div><b>M</b> 地图 关/小/全屏</div>
+    <div><b>F</b> ANGLE / ACRO</div>
+    <div><b>T</b> 悬停辅助开关</div>
+    <div><b>G</b> 取消引导</div>
+    <div><b>X</b> 模拟信号干扰</div>
+    <div><b>R</b> 复位重生</div>
+    <div><b>右键拖动</b> FPV 环视</div>
+    <div><b>滚轮</b> 云台俯仰(MAV)</div>
+    <div><b>地图双击</b> 引导至该点</div>
+    <div><b>地图右键</b> 标记目标点</div>
+    <div><b>手柄</b> 双摇杆 Mode2 · A投弹</div>
+  </div>
+
+  <!-- start menu -->
+  <div id="menu">
+    <div class="panel">
+      <h1>YCC · UAV TRAINING SIM</h1>
+      <h2>YCC FLIGHT SYSTEMS — FPV TRAINING RANGE · BUILD 0.1 / 无人机训练模拟器</h2>
+      <div class="drone-select">
+        <div class="drone-card sel" id="card-fpv">
+          <h3>5" FPV FREESTYLE</h3>
+          <p>高速穿越机 · 手动油门 · ACRO/ANGLE<br>极速约 85km/h · 敏捷闪躲 · 俯冲投弹</p>
+        </div>
+        <div class="drone-card" id="card-mavic">
+          <h3>RECON VTOL "MAV"</h3>
+          <p>航拍改装机 · 定高悬停 · 云台视角<br>垂直精确投弹 · 长航时 · 稳定平台</p>
+        </div>
+      </div>
+      <div class="keys">
+        <div><b>W / S</b> 俯仰 (Pitch)</div>
+        <div><b>A / D</b> 偏航 (Yaw)</div>
+        <div><b>Q / E</b> 横滚 (Roll)</div>
+        <div><b>Shift / Ctrl</b> 上升 / 下降（松开自动悬停）</div>
+        <div><b>B</b> 投放弹药</div>
+        <div><b>N</b> 投放标记烟雾</div>
+        <div><b>V</b> FPV / 追踪视角</div>
+        <div><b>C</b> 前视 / 垂直下视摄像头</div>
+        <div><b>U</b> 镜头 鱼眼 / 广角 / 标准</div>
+        <div><b>M</b> 地图 关 / 小窗 / 全屏</div>
+        <div><b>F</b> ANGLE / ACRO 模式</div>
+        <div><b>T</b> 悬停辅助开关（FPV手动油门）</div>
+        <div><b>G</b> 取消引导 · <b>X</b> 模拟干扰</div>
+        <div><b>R</b> 复位重生 · <b>1/2</b> 切换机型</div>
+        <div><b>右键拖动</b> FPV 环视 · <b>滚轮</b> 云台俯仰</div>
+        <div><b>地图双击</b> 引导至该经纬度 · <b>右键</b> 标记目标</div>
+      </div>
+      <button id="launch">TAKE OFF / 起飞</button>
+    </div>
+  </div>
+
+  <!-- YCC boot / initialisation screen -->
+  <div id="boot">
+    <div class="boot-glow"></div>
+    <div class="boot-inner">
+      <div class="boot-brand">
+        <span class="boot-ycc">YCC</span>
+        <span class="boot-brand-sub">FLIGHT SYSTEMS<br>UAV TRAINING SIMULATOR</span>
+      </div>
+      <div class="boot-title">无人机训练模拟器 · 系统初始化</div>
+      <div class="boot-bar-wrap">
+        <div class="boot-bar"><div id="boot-fill"></div></div>
+        <div id="boot-pct">00%</div>
+      </div>
+      <div id="boot-log"></div>
+      <div class="boot-foot">INITIALISING · 正在初始化</div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
